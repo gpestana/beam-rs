@@ -1,71 +1,61 @@
 #![allow(unused_imports)] // remove after dev
 #![allow(dead_code)] // remove after dev
 
-// TODO: refactor to use abstract pairing engine
 use ark_ec::{PairingEngine, ProjectiveCurve};
-use ark_ff::{Field, UniformRand, Zero};
-use rand::{thread_rng, CryptoRng, Rng};
-
-// ark_bls12_381
-use ark_bls12_381::{Fr, G1Projective as G1, G2Projective as G2, Bls12_381};
-use ark_ff::One;
+use ark_ff::{Field, UniformRand, Zero, One};
+use rand::{thread_rng, CryptoRng, Rng, RngCore};
 
 pub struct BroadcastChannel<E: PairingEngine> {
     pub pubkeys: (Vec<E::G1Projective>, E::G1Projective)
 }
 
-pub struct Setup {
-    pub pubkey: (Vec<G1>, G1),
-    pub skeys: Vec<G1>,
-}
+impl<E: PairingEngine> BroadcastChannel<E> {
+    pub fn new<R: RngCore>(
+        capacity: usize,
+        rng: &mut R,
+    ) -> (Self, Vec<E::G1Projective>) {
 
-pub fn new_setup(n: usize) -> Setup {
-    let rng = &mut thread_rng();
-    let rnd_a = Fr::rand(rng);
-    let rnd_y = Fr::rand(rng);
+    let rnd_a = E::Fr::rand(rng);
+    let rnd_y = E::Fr::rand(rng);
 
-    let mut pk_x = vec![G1::prime_subgroup_generator(); 2 * n + 1];
-    let mut sks = vec![G1::prime_subgroup_generator(); 2 * n];
+    let mut pk_x = vec![E::G1Projective::prime_subgroup_generator(); 2 * capacity + 1];
+    let mut sks = vec![E::G1Projective::prime_subgroup_generator(); 2 * capacity];
 
-    let mut v = G1::prime_subgroup_generator();
+    let mut v = E::G1Projective::prime_subgroup_generator();
     v *= rnd_y;
 
-    let mut i = Fr::zero();
+    let mut i = E::Fr::zero();
 
     for idx in 1..pk_x.len() {
-        i += Fr::one();
+        i += &E::Fr::one();
         let mut mut_i = i.clone();
 
-        mut_i *= rnd_a;
+        mut_i *= &rnd_a;
         pk_x[idx] *= mut_i;
 
         sks[idx-1] *= rnd_y;
     }
 
-    Setup {
-        pubkey: (pk_x, v),
-        skeys: sks,
+    (BroadcastChannel{pubkeys: (pk_x, v)}, sks)
     }
-}
 
-pub fn encrypt(pkey: (Vec<G1>, G1), n: usize) {
-    let rng = &mut thread_rng();
-    let rnd_t = Fr::rand(rng);
-
-    let b: G2 = rng.gen();
-    //let k = Bls12_381::pairing(pkey.0[n], pkey.0[0]);
-    let k = Bls12_381::pairing(pkey.0[n], b);
+    pub fn encrypt(&self) {}
+    pub fn decrypt(&self) {}
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
+    use ark_bls12_381::Bls12_381;
+
     #[test]
     fn test_e2e() {
-        let n = 3; // number of receivers
-        let setup = new_setup(n);
+        let rnd = &mut thread_rng(); 
+        let capacity = 3; // number of receivers
 
-        assert_eq!(setup.pubkey.0.len(), n * 2 + 1);
-        assert_eq!(setup.skeys.len(), n * 2);
+        let setup = BroadcastChannel::<Bls12_381>::new(capacity, rnd);
+
+        assert_eq!(setup.0.pubkeys.0.len(), capacity * 2 + 1);
+        assert_eq!(setup.1.len(), capacity * 2);
     }
 }
