@@ -1,45 +1,83 @@
-#![allow(unused_imports)] // remove after dev
-#![allow(dead_code)] // remove after dev
-
 use ark_ec::{PairingEngine, ProjectiveCurve};
-use ark_ff::{Field, UniformRand, Zero, One};
-use rand::{thread_rng, CryptoRng, Rng, RngCore};
+use ark_ff::{One, UniformRand, Zero};
+use rand::{thread_rng, RngCore};
+
+pub struct BroadcastPubKey<E: PairingEngine> {
+    pub p_set: Vec<E::G1Projective>,
+    pub v: E::G1Projective,
+    pub q: E::G2Projective,
+    pub q_1: E::G2Projective,
+}
 
 pub struct BroadcastChannel<E: PairingEngine> {
-    pub pubkeys: (Vec<E::G1Projective>, E::G1Projective)
+    pub channel_pubkey: BroadcastPubKey<E>,
+    pub users_pubkeys: Vec<E::G2Projective>,
+    pub users_skeys: Vec<E::G1Projective>,
+    pub capacity: usize,
 }
 
 impl<E: PairingEngine> BroadcastChannel<E> {
-    pub fn new<R: RngCore>(
-        capacity: usize,
-        rng: &mut R,
-    ) -> (Self, Vec<E::G1Projective>) {
+    /// setup for a new broadcast channel with `n` readers
+    pub fn new<R: RngCore>(capacity: usize, rng: &mut R) -> Self {
+        let rnd_alpha = E::Fr::rand(rng);
+        let rnd_gamma = E::Fr::rand(rng);
 
-    let rnd_a = E::Fr::rand(rng);
-    let rnd_y = E::Fr::rand(rng);
+        let mut p_set = vec![E::G1Projective::prime_subgroup_generator(); 2 * capacity + 1];
+        let mut users_pubkeys = vec![E::G2Projective::prime_subgroup_generator(); capacity];
+        let mut users_skeys = vec![E::G1Projective::prime_subgroup_generator(); capacity];
 
-    let mut pk_x = vec![E::G1Projective::prime_subgroup_generator(); 2 * capacity + 1];
-    let mut sks = vec![E::G1Projective::prime_subgroup_generator(); 2 * capacity];
+        let mut v = E::G1Projective::prime_subgroup_generator();
+        v *= rnd_gamma;
 
-    let mut v = E::G1Projective::prime_subgroup_generator();
-    v *= rnd_y;
+        let mut i = E::Fr::zero();
 
-    let mut i = E::Fr::zero();
+        for idx in 1..p_set.len() {
+            i += &E::Fr::one();
 
-    for idx in 1..pk_x.len() {
-        i += &E::Fr::one();
-        let mut mut_i = i.clone();
+            if idx == capacity + 1 {
+                continue;
+            }
 
-        mut_i *= &rnd_a;
-        pk_x[idx] *= mut_i;
+            let mut mut_i = i.clone();
+            mut_i *= &rnd_alpha;
 
-        sks[idx-1] *= rnd_y;
+            p_set[idx] *= mut_i;
+
+            if idx <= capacity - 1 {
+                users_pubkeys[idx] *= mut_i;
+
+                let mut ski = p_set[idx];
+                ski *= rnd_gamma;
+                users_skeys[idx] = ski;
+            }
+        }
+
+        let channel_pubkey = BroadcastPubKey {
+            p_set: p_set,
+            v: v,
+            q: users_pubkeys[0],
+            q_1: users_pubkeys[1],
+        };
+
+        BroadcastChannel {
+            channel_pubkey,
+            users_pubkeys,
+            users_skeys,
+            capacity,
+        }
     }
 
-    (BroadcastChannel{pubkeys: (pk_x, v)}, sks)
+    /// encrypts message to publish in channe
+    pub fn encrypt<R: RngCore>(&self, reader_ids: Vec<usize>, rng: &mut R) -> E::Fqk {
+        let rnd_k = E::Fr::rand(rng);
+        let mut p = self.channel_pubkey.p_set[self.capacity];
+        let q = self.channel_pubkey.q;
+        p *= rnd_k; // correct?
+
+        E::pairing(p, q)
     }
 
-    pub fn encrypt(&self) {}
+    /// decrypts message from channel
     pub fn decrypt(&self) {}
 }
 
@@ -50,12 +88,13 @@ mod test {
 
     #[test]
     fn test_e2e() {
-        let rnd = &mut thread_rng(); 
+        let rnd = &mut thread_rng();
         let capacity = 3; // number of receivers
 
         let setup = BroadcastChannel::<Bls12_381>::new(capacity, rnd);
 
-        assert_eq!(setup.0.pubkeys.0.len(), capacity * 2 + 1);
-        assert_eq!(setup.1.len(), capacity * 2);
+        assert_eq!(setup.users_skeys.len(), capacity);
+        assert_eq!(setup.users_pubkeys.len(), capacity);
+        assert_eq!(setup.channel_pubkey.p_set.len(), capacity * 2 + 1);
     }
 }
