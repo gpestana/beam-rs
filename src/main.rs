@@ -67,18 +67,105 @@ impl<E: PairingEngine> BroadcastChannel<E> {
         }
     }
 
-    /// encrypts message to publish in channe
-    pub fn encrypt<R: RngCore>(&self, reader_ids: Vec<usize>, rng: &mut R) -> E::Fqk {
+    /// encrypts message to publish in channel
+    pub fn encrypt<R: RngCore>(
+        &self,
+        reader_ids: &Vec<usize>,
+        rng: &mut R,
+    ) -> ((E::G2Projective, E::G1Projective), E::Fqk) {
         let rnd_k = E::Fr::rand(rng);
         let mut p = self.channel_pubkey.p_set[self.capacity];
-        let q = self.channel_pubkey.q;
-        p *= rnd_k; // correct?
+        let mut q = self.channel_pubkey.q;
+        let mut v = self.channel_pubkey.v;
 
-        E::pairing(p, q)
+        q *= rnd_k;
+        p *= rnd_k;
+        v *= rnd_k;
+
+        let mut sum_g1 = self.channel_pubkey.v.clone();
+        for id in reader_ids {
+            sum_g1 += &self.channel_pubkey.p_set[self.capacity + 1 - id];
+        }
+
+        sum_g1 *= rnd_k;
+
+        let header = (q, sum_g1);
+        let k = E::pairing(p, q);
+
+        (header, k)
     }
 
     /// decrypts message from channel
-    pub fn decrypt(&self) {}
+    pub fn decrypt(
+        &self,
+        i: usize,
+        reader_ids: &Vec<usize>,
+        header: (E::G2Projective, E::G1Projective),
+    ) -> E::Fqk {
+        let mut k = E::pairing(header.1, self.users_pubkeys[i]);
+
+        let mut sum_g1 = self.users_skeys[i];
+        for id in reader_ids {
+            sum_g1 += &self.channel_pubkey.p_set[self.capacity + 1 - id + i];
+        }
+
+        let k_denom = E::pairing(sum_g1, header.0);
+        k /= &k_denom;
+        k
+    }
+}
+
+/// generates encryption key to encrypt the message to publish in channel
+pub fn generate_key_encrypt<E: PairingEngine, R: RngCore>(
+    channel_capacity: usize,
+    channel_pubkey_pset: Vec<E::G1Projective>,
+    channel_pubkey_q: E::G2Projective,
+    channel_pubkey_v: E::G1Projective,
+    reader_ids: &Vec<usize>,
+    rng: &mut R,
+) -> ((E::G2Projective, E::G1Projective), E::Fqk) {
+    let rnd_k = E::Fr::rand(rng);
+    let mut p = channel_pubkey_pset[channel_capacity].clone();
+    let mut q = channel_pubkey_q.clone();
+    let mut v = channel_pubkey_v.clone();
+
+    q *= rnd_k;
+    p *= rnd_k;
+    v *= rnd_k;
+
+    let mut sum_g1 = channel_pubkey_v;
+    for id in reader_ids {
+        sum_g1 += &channel_pubkey_pset[channel_capacity + 1 - id];
+    }
+
+    sum_g1 *= rnd_k;
+
+    let header = (q, sum_g1);
+    let k = E::pairing(p, q);
+
+    (header, k)
+}
+
+/// generates decryption key to decrypt message in channel
+pub fn generat_key_decrypt<E: PairingEngine>(
+    channel_pubkey_pset: Vec<E::G1Projective>,
+    channel_capacity: usize,
+    user_id: usize,
+    user_skey: E::G1Projective,
+    users_pubkeys: Vec<E::G2Projective>,
+    reader_ids: &Vec<usize>,
+    header: (E::G2Projective, E::G1Projective),
+) -> E::Fqk {
+    let mut k = E::pairing(header.1, users_pubkeys[user_id]);
+
+    let mut sum_g1 = user_skey;
+    for i in reader_ids {
+        sum_g1 += &channel_pubkey_pset[channel_capacity + 1 - i + user_id];
+    }
+
+    let k_denom = E::pairing(sum_g1, header.0);
+    k /= &k_denom;
+    k
 }
 
 #[cfg(test)]
@@ -88,13 +175,28 @@ mod test {
 
     #[test]
     fn test_e2e() {
-        let rnd = &mut thread_rng();
+        let rng = &mut thread_rng();
         let capacity = 3; // number of receivers
 
-        let setup = BroadcastChannel::<Bls12_381>::new(capacity, rnd);
+        let setup = BroadcastChannel::<Bls12_381>::new(capacity, rng);
 
         assert_eq!(setup.users_skeys.len(), capacity);
         assert_eq!(setup.users_pubkeys.len(), capacity);
         assert_eq!(setup.channel_pubkey.p_set.len(), capacity * 2 + 1);
+
+        let s = &vec![0, 2]; // receiver 0 and 2 can decrypt the stream in the encryption channel
+        let encrypt_setup = setup.encrypt(s, rng);
+
+        let header = encrypt_setup.0;
+        let encryption_key = encrypt_setup.1;
+
+        // generate keys for all users (only s0 and s1 should have valid key)
+        let key_s0 = setup.decrypt(0, s, header);
+        let key_s1 = setup.decrypt(0, s, header);
+        let key_s2 = setup.decrypt(0, s, header);
+
+        assert_eq!(key_s0, encryption_key);
+        assert_eq!(key_s2, encryption_key);
+        assert_ne!(key_s1, encryption_key)
     }
 }
