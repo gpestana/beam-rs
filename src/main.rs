@@ -43,20 +43,20 @@ impl<E: PairingEngine> BroadcastChannel<E> {
 
             p_set[idx] *= mut_i;
 
-            if idx <= capacity - 1 {
-                users_pubkeys[idx] *= mut_i;
+            if idx <= capacity {
+                users_pubkeys[idx - 1] *= mut_i;
 
                 let mut ski = p_set[idx];
                 ski *= rnd_gamma;
-                users_skeys[idx] = ski;
+                users_skeys[idx - 1] = ski;
             }
         }
 
         let channel_pubkey = BroadcastPubKey {
             p_set: p_set,
             v: v,
-            q: users_pubkeys[0],
-            q_1: users_pubkeys[1],
+            q: E::G2Projective::prime_subgroup_generator(),
+            q_1: users_pubkeys[0],
         };
 
         BroadcastChannel {
@@ -74,23 +74,33 @@ impl<E: PairingEngine> BroadcastChannel<E> {
         rng: &mut R,
     ) -> ((E::G2Projective, E::G1Projective), E::Fqk) {
         let rnd_k = E::Fr::rand(rng);
-        let mut p = self.channel_pubkey.p_set[self.capacity];
+
+        let mut pn = self.channel_pubkey.p_set[self.capacity];
         let mut q = self.channel_pubkey.q;
         let mut v = self.channel_pubkey.v;
 
-        q *= rnd_k;
-        p *= rnd_k;
-        v *= rnd_k;
+        // K
+        pn *= rnd_k;
+        let k = E::pairing(pn, self.channel_pubkey.q_1);
 
-        let mut sum_g1 = self.channel_pubkey.v.clone();
-        for id in reader_ids {
+        // Header
+        //let mut sum_g1 = self.channel_pubkey.v.clone();
+        let mut sum_g1 = self.channel_pubkey.p_set[self.capacity + 1 - reader_ids[0]];
+        let mut sum_readers_ids = reader_ids.clone();
+        sum_readers_ids.drain(0..1);
+        for id in sum_readers_ids {
             sum_g1 += &self.channel_pubkey.p_set[self.capacity + 1 - id];
         }
 
+        v *= rnd_k;
         sum_g1 *= rnd_k;
+        // k(V, Sum)
+        sum_g1 += &v;
+
+        // kQ
+        q *= rnd_k;
 
         let header = (q, sum_g1);
-        let k = E::pairing(p, q);
 
         (header, k)
     }
@@ -106,66 +116,16 @@ impl<E: PairingEngine> BroadcastChannel<E> {
 
         let mut sum_g1 = self.users_skeys[i];
         for id in reader_ids {
-            sum_g1 += &self.channel_pubkey.p_set[self.capacity + 1 - id + i];
+            if *id == i {
+                continue
+            }
+            sum_g1 += &self.channel_pubkey.p_set[self.capacity + 1 - *id + i];
         }
 
         let k_denom = E::pairing(sum_g1, header.0);
         k /= &k_denom;
         k
     }
-}
-
-/// generates encryption key to encrypt the message to publish in channel
-pub fn generate_key_encrypt<E: PairingEngine, R: RngCore>(
-    channel_capacity: usize,
-    channel_pubkey_pset: Vec<E::G1Projective>,
-    channel_pubkey_q: E::G2Projective,
-    channel_pubkey_v: E::G1Projective,
-    reader_ids: &Vec<usize>,
-    rng: &mut R,
-) -> ((E::G2Projective, E::G1Projective), E::Fqk) {
-    let rnd_k = E::Fr::rand(rng);
-    let mut p = channel_pubkey_pset[channel_capacity].clone();
-    let mut q = channel_pubkey_q.clone();
-    let mut v = channel_pubkey_v.clone();
-
-    q *= rnd_k;
-    p *= rnd_k;
-    v *= rnd_k;
-
-    let mut sum_g1 = channel_pubkey_v;
-    for id in reader_ids {
-        sum_g1 += &channel_pubkey_pset[channel_capacity + 1 - id];
-    }
-
-    sum_g1 *= rnd_k;
-
-    let header = (q, sum_g1);
-    let k = E::pairing(p, q);
-
-    (header, k)
-}
-
-/// generates decryption key to decrypt message in channel
-pub fn generat_key_decrypt<E: PairingEngine>(
-    channel_pubkey_pset: Vec<E::G1Projective>,
-    channel_capacity: usize,
-    user_id: usize,
-    user_skey: E::G1Projective,
-    users_pubkeys: Vec<E::G2Projective>,
-    reader_ids: &Vec<usize>,
-    header: (E::G2Projective, E::G1Projective),
-) -> E::Fqk {
-    let mut k = E::pairing(header.1, users_pubkeys[user_id]);
-
-    let mut sum_g1 = user_skey;
-    for i in reader_ids {
-        sum_g1 += &channel_pubkey_pset[channel_capacity + 1 - i + user_id];
-    }
-
-    let k_denom = E::pairing(sum_g1, header.0);
-    k /= &k_denom;
-    k
 }
 
 #[cfg(test)]
@@ -184,16 +144,18 @@ mod test {
         assert_eq!(setup.users_pubkeys.len(), capacity);
         assert_eq!(setup.channel_pubkey.p_set.len(), capacity * 2 + 1);
 
-        let s = &vec![0, 2]; // receiver 0 and 2 can decrypt the stream in the encryption channel
-        let encrypt_setup = setup.encrypt(s, rng);
+        let s = vec![0, 2]; // receiver 0 and 2 can decrypt the stream in the encryption channel
+        let encrypt_setup = setup.encrypt(&s, rng);
 
         let header = encrypt_setup.0;
         let encryption_key = encrypt_setup.1;
 
-        // generate keys for all users (only s0 and s1 should have valid key)
-        let key_s0 = setup.decrypt(0, s, header);
-        let key_s1 = setup.decrypt(0, s, header);
-        let key_s2 = setup.decrypt(0, s, header);
+        // generates keys for all users (only s0 and s1 should have valid key)
+        let key_s0 = setup.decrypt(0, &s, header);
+        let key_s1 = setup.decrypt(1, &s, header);
+        let key_s2 = setup.decrypt(2, &s, header);
+
+        assert_eq!(key_s0, key_s2);
 
         assert_eq!(key_s0, encryption_key);
         assert_eq!(key_s2, encryption_key);
