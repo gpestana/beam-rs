@@ -1,6 +1,6 @@
 use ark_ec::{PairingEngine, ProjectiveCurve};
 use ark_ff::{One, UniformRand, Zero};
-use rand::{thread_rng, RngCore};
+use rand::RngCore;
 
 pub struct BroadcastPubKey<E: PairingEngine> {
     pub p_set: Vec<E::G1Projective>,
@@ -123,145 +123,127 @@ impl<E: PairingEngine> BroadcastChannel<E> {
         k /= &k_denom;
         k
     }
-
 }
 
 #[cfg(test)]
 mod test {
+    use std::println;
+
     use super::*;
     use ark_bls12_381::{Bls12_381, G1Projective, G2Projective};
+    use rand::thread_rng;
 
     #[test]
     fn test_pen_and_paper() {
-        use rand::Rng;
         use ark_bls12_381::Fr;
+        use rand::Rng;
         use std::collections::HashMap;
         use std::ops::DivAssign;
 
-        let mut rng = &mut thread_rng(); 
-
-        let mut reader_set = HashMap::new();
-        let channel_capacity = 3;
-        reader_set.insert("user_1", 1);
-        reader_set.insert("user_2", 2);
-        reader_set.insert("user_3", 3);
+        let mut rng = &mut thread_rng();
 
         // 1. SETUP
-        let mut alpha: Fr = UniformRand::rand(&mut rng);
-        let mut gamma: Fr = UniformRand::rand(&mut rng);
+        let channel_capacity = 3;
+        let alpha: Fr = UniformRand::rand(&mut rng);
+        let gamma: Fr = UniformRand::rand(&mut rng);
 
         // SETUP::p_set
-        let mut p_set: Vec::<G1Projective> = vec![rng.gen(); 2 * channel_capacity];
-
         let P: G1Projective = rng.gen();
+
         let mut V: G1Projective = P.clone();
         V *= gamma;
 
-        let mut p1 = P.clone();
-        p1 *= alpha;
+        let mut p_set: Vec<G1Projective> = vec![P; 2 * channel_capacity];
 
-        let mut p2 = P.clone();
-        p2 *= alpha;
-        p2 *= alpha;
+        // P_1
+        p_set[1] *= alpha;
 
-        let mut p3 = P.clone();
-        p3 *= alpha;
-        p3 *= alpha;
-        p3 *= alpha;
+        // P_2
+        p_set[2] *= alpha;
+        p_set[2] *= alpha;
 
-        let mut p5 = P.clone();
-        p5 *= alpha;
-        p5 *= alpha;
-        p5 *= alpha;
-        p5 *= alpha;
-        p5 *= alpha;
+        // P_3
+        p_set[3] *= alpha;
+        p_set[3] *= alpha;
+        p_set[3] *= alpha;
 
-        let mut p6 = P.clone();
-        p6 *= alpha;
-        p6 *= alpha;
-        p6 *= alpha;
-        p6 *= alpha;
-        p6 *= alpha;
-        p6 *= alpha;
+        // P_5
+        p_set[4] *= alpha;
+        p_set[4] *= alpha;
+        p_set[4] *= alpha;
+        p_set[4] *= alpha;
+        p_set[4] *= alpha;
 
-        p_set[0] = P;
-        p_set[1] = p1;
-        p_set[2] = p2;
-        p_set[3] = p3;
-        p_set[4] = p5;
-        p_set[5] = p6;
-        
+        // P_6
+        p_set[5] *= alpha;
+        p_set[5] *= alpha;
+        p_set[5] *= alpha;
+        p_set[5] *= alpha;
+        p_set[5] *= alpha;
+        p_set[5] *= alpha;
+
         // SETUP::q_set
-        let mut q_set: Vec::<G2Projective> = vec![rng.gen(); channel_capacity]; 
-        
         let Q: G2Projective = rng.gen();
+        let mut q_set: Vec<G2Projective> = vec![Q; channel_capacity];
 
-        let mut q1 = Q.clone();
-        q1 *= alpha;
+        // Q_1
+        q_set[0] *= alpha;
 
-        let mut q2 = Q.clone();
-        q2 *= alpha;
-        q2 *= alpha;
+        // Q_2
+        q_set[1] *= alpha;
+        q_set[1] *= alpha;
 
-        let mut q3 = Q.clone();
-        q3 *= alpha;
-        q3 *= alpha;
-        q3 *= alpha;
-
-        q_set[0] = q1;
-        q_set[1] = q2;
-        q_set[2] = q3;
+        // Q_3
+        q_set[2] *= alpha;
+        q_set[2] *= alpha;
+        q_set[2] *= alpha;
 
         // SETUP::users_skeys
-        let mut users_skeys: Vec::<G1Projective> = vec![rng.gen(); channel_capacity];
+        let mut users_skeys: Vec<G1Projective> = vec![P; channel_capacity];
 
-        let mut d1 = P.clone();
-        d1 *= gamma;
+        // D_1
+        users_skeys[0] *= gamma;
 
-        let mut d2 = P.clone();
-        d2 *= gamma;
-        d2 *= gamma;
+        // D_2
+        users_skeys[1] *= gamma;
+        users_skeys[1] *= gamma;
 
-        let mut d3 = P.clone();
-        d3 *= gamma;
-        d3 *= gamma;
-        d3 *= gamma;
-
-        users_skeys[0] = d1;
-        users_skeys[1] = d2;
-        users_skeys[2] = d3;
-
+        // D_3
+        users_skeys[2] *= gamma;
+        users_skeys[2] *= gamma;
+        users_skeys[2] *= gamma;
 
         // 2. ENCRYPT
         // s = {1, 3}, r = {2}
         let mut k: Fr = UniformRand::rand(&mut rng);
 
-        let mut Q_k = q_set[1];
-        Q_k *= k;
+        let mut q_1k = q_set[0];
+        q_1k *= k;
 
-        let mut K = Bls12_381::pairing(p_set[channel_capacity], Q_k); 
+        let mut K = Bls12_381::pairing(p_set[channel_capacity], q_1k);
 
         let mut header0 = Q;
         header0 *= k;
 
-
         // s = {1, 3}
         let mut j = 1; // user 1
         let mut header1 = p_set[channel_capacity + 1 - j];
+
         let mut j = 3; // user_3
         header1 += p_set[channel_capacity + 1 - j];
-
+    
+        // header1 = k*v + k*Sum
         let mut v = V.clone();
         v *= k;
         header1 *= k;
 
         header1 += v;
 
-        let header = (header0, header1); 
+        let header = (header0, header1);
 
         // 3. DECRYPT
         // s = {1, 3}, r = {2}
-        
+
         // s1 key:
         let mut j = 1; // user 1
 
@@ -284,6 +266,7 @@ mod test {
         assert_eq!(K1, K3);
     }
 
+
     #[test]
     fn test_e2e() {
         let rng = &mut thread_rng();
@@ -298,6 +281,9 @@ mod test {
         let s = vec![1, 3]; // receiver 0 and 2 can decrypt the stream in the encryption channel
         let encrypt_setup = setup.encrypt(s.clone(), rng);
 
+        use ark_ff::ToBytes;
+
+        // ( HEADER: (E::G2Projective, E::G1Projective), KEY: E::Fqk)
         let header = encrypt_setup.0;
         let encryption_key = encrypt_setup.1;
 
