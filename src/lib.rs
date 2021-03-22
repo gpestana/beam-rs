@@ -15,6 +15,32 @@ pub struct KeyPair<E: PairingEngine> {
     private_key: E::G1Projective,
 }
 
+impl<E: PairingEngine> KeyPair<E> {
+    /// derives key to decrypto message from broadcast channel
+    pub fn derive_key(
+        &self,
+        id: usize,
+        reader_ids: Vec<usize>,
+        channel_capacity: usize,
+        channel_p_set: Vec<E::G1Projective>,
+        header: (E::G2Projective, E::G1Projective),
+    ) -> E::Fqk {
+        let mut k = E::pairing(header.1, self.public_key);
+
+        let mut sum_g1 = self.private_key;
+        for j in reader_ids {
+            if j == id {
+                continue;
+            }
+            sum_g1 += &channel_p_set[channel_capacity - j + id];
+        }
+
+        let k_denom = E::pairing(sum_g1, header.0);
+        k /= &k_denom;
+        k
+    }
+}
+
 /// Pool of channel consumers of the channel
 #[derive(Clone, Debug)]
 pub struct Pool<E: PairingEngine> {
@@ -90,7 +116,7 @@ impl<E: PairingEngine> BroadcastChannel<E> {
         }
     }
 
-    /// encrypts message to publish in channel
+    /// encrypts message to publish in the channel
     pub fn encrypt<R: RngCore>(
         &self,
         reader_ids: Vec<usize>,
@@ -119,30 +145,6 @@ impl<E: PairingEngine> BroadcastChannel<E> {
         let header = (q, sum_g1);
 
         (header, k)
-    }
-
-    /// decrypts message from channel
-    pub fn decrypt(
-        &self,
-        i: usize,
-        reader_ids: Vec<usize>,
-        header: (E::G2Projective, E::G1Projective),
-    ) -> E::Fqk {
-        let user_keypair = self.participants.list[&i]; // TODO: get priv key from input
-        let mut k = E::pairing(header.1, user_keypair.public_key);
-
-        let mut sum_g1 = user_keypair.private_key;
-        for j in reader_ids {
-            if j == i {
-                continue;
-            }
-            sum_g1 += &self.channel_pubkey.p_set[self.capacity - j + i];
-            //sum_g1 += &self.channel_pubkey.p_set[self.capacity + 1 - j + i]; // TODO
-        }
-
-        let k_denom = E::pairing(sum_g1, header.0);
-        k /= &k_denom;
-        k
     }
 }
 
@@ -180,8 +182,9 @@ mod test {
         let header = encrypt_setup.0;
         let encryption_key = encrypt_setup.1;
 
-        let key_s1 = setup.decrypt(0, s.clone(), header);
-        assert_eq!(key_s1, encryption_key);
+        let reader0 = setup.participants.list[&0];
+        let key_r0 = reader0.derive_key(0, s, capacity, setup.channel_pubkey.p_set, header);
+        assert_eq!(key_r0, encryption_key);
 
         //let key_s2 = setup.decrypt(1, s.clone(), header);
         //assert_eq!(key_s2, encryption_key);
