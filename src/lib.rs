@@ -1,11 +1,13 @@
 #![allow(non_snake_case, dead_code, unused_mut)] // TODO: remove after dev
 
+use std::collections::HashMap;
+
 use ark_ec::{PairingEngine, ProjectiveCurve};
-use ark_ff::{One, UniformRand, Zero};
+use ark_ff::{One, UniformRand};
 use rand::RngCore;
 
 /// Key pair
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct KeyPair<E: PairingEngine> {
     /// Public Key
     public_key: E::G2Projective,
@@ -13,28 +15,34 @@ pub struct KeyPair<E: PairingEngine> {
     private_key: E::G1Projective,
 }
 
-/// Participant on the broadcast channel (consumer)
-pub struct Participant<E: PairingEngine> {
-    id: usize,
-    key_pair: KeyPair<E>,
+/// Pool of channel consumers of the channel
+#[derive(Clone, Debug)]
+pub struct Pool<E: PairingEngine> {
+    pub list: HashMap<usize, KeyPair<E>>, // perhaps change from usize to an hash(usize)?
+}
+
+impl<E: PairingEngine> Pool<E> {
+    pub fn new() -> Self {
+        return Pool {
+            list: HashMap::new(),
+        };
+    }
 }
 
 pub struct BroadcastPubKey<E: PairingEngine> {
     pub p_set: Vec<E::G1Projective>,
     pub v: E::G1Projective,
-
     pub q: E::G2Projective,
     pub q_1: E::G2Projective,
 }
 
 pub struct BroadcastChannel<E: PairingEngine> {
     pub channel_pubkey: BroadcastPubKey<E>,
-    pub participants: Vec<Participant<E>>,
+    pub participants: Pool<E>,
     pub capacity: usize,
 }
 
 impl<E: PairingEngine> BroadcastChannel<E> {
-
     /// setup for a new broadcast channel with `n` readers
     pub fn new<R: RngCore>(capacity: usize, rng: &mut R) -> Self {
         let p_gen = E::G1Projective::prime_subgroup_generator();
@@ -44,26 +52,28 @@ impl<E: PairingEngine> BroadcastChannel<E> {
 
         let mut p_set = Vec::new();
 
+        let mut participants = Pool::new();
+
         let mut v = E::G1Projective::prime_subgroup_generator();
         v *= rnd_gamma;
 
         p_set.push(p_gen);
         for i in 1..2 * capacity + 1 {
             if i == capacity + 1 {
-                continue
+                continue;
             }
             p_set.push(exp(&p_gen, rnd_alpha, i));
         }
 
-        let mut participants: Vec::<Participant<E>> = Vec::new();
         for i in 0..capacity {
             let public_key = exp(&q_gen, E::Fr::one(), i);
             let private_key = exp(&p_set[i], rnd_gamma, i);
-            let key_pair = KeyPair{public_key, private_key};
-            participants.push(Participant{
-                id: i + 1,
-                key_pair,
-            });
+            let key_pair = KeyPair {
+                public_key,
+                private_key,
+            };
+
+            participants.list.insert(i, key_pair);
         }
 
         let channel_pubkey = BroadcastPubKey {
@@ -118,7 +128,7 @@ impl<E: PairingEngine> BroadcastChannel<E> {
         reader_ids: Vec<usize>,
         header: (E::G2Projective, E::G1Projective),
     ) -> E::Fqk {
-        let user_keypair = self.participants[i - 1].key_pair;
+        let user_keypair = self.participants.list[&i]; // TODO: get priv key from input
         let mut k = E::pairing(header.1, user_keypair.public_key);
 
         let mut sum_g1 = user_keypair.private_key;
@@ -161,24 +171,22 @@ mod test {
 
         let setup = BroadcastChannel::<Bls12_381>::new(capacity, rng);
 
-        assert_eq!(setup.participants.len(), capacity);
+        assert_eq!(setup.participants.list.len(), capacity);
         assert_eq!(setup.channel_pubkey.p_set.len(), capacity * 2);
 
-        let s = vec![1, 2, 3]; // receiver 0 and 2 can decrypt the stream in the encryption channel
+        let s = vec![0, 1, 2]; // receiver group
         let encrypt_setup = setup.encrypt(s.clone(), rng);
 
-        // ( HEADER: (E::G2Projective, E::G1Projective), KEY: E::Fqk)
         let header = encrypt_setup.0;
         let encryption_key = encrypt_setup.1;
 
-        // generates keys for all users (only s1 and s2 should have valid key)
-        let key_s1 = setup.decrypt(1, s.clone(), header);
-        let key_s2 = setup.decrypt(2, s.clone(), header);
-        let key_s3 = setup.decrypt(3, s.clone(), header);
-
-        //assert_eq!(key_s1, key_s3);
+        let key_s1 = setup.decrypt(0, s.clone(), header);
         assert_eq!(key_s1, encryption_key);
-        assert_eq!(key_s2, encryption_key);
-        assert_eq!(key_s3, encryption_key);
+
+        //let key_s2 = setup.decrypt(1, s.clone(), header);
+        //assert_eq!(key_s2, encryption_key);
+
+        //let key_s3 = setup.decrypt(2, s.clone(), header);
+        //assert_eq!(key_s3, encryption_key);
     }
 }
