@@ -1,9 +1,7 @@
-#![allow(non_snake_case, dead_code, unused_mut)] // TODO: remove after dev
-
 use std::collections::HashMap;
 
 use ark_ec::{PairingEngine, ProjectiveCurve};
-use ark_ff::{One, UniformRand};
+use ark_ff::UniformRand;
 use rand::RngCore;
 
 /// Key pair
@@ -16,7 +14,7 @@ pub struct KeyPair<E: PairingEngine> {
 }
 
 impl<E: PairingEngine> KeyPair<E> {
-    /// derives key to decrypto message from broadcast channel
+    /// derives key to decryp to message published in the broadcast channel
     pub fn derive_key(
         &self,
         id: usize,
@@ -32,7 +30,7 @@ impl<E: PairingEngine> KeyPair<E> {
             if j == id {
                 continue;
             }
-            sum_g1 += &channel_p_set[channel_capacity - j + id];
+            sum_g1 += &channel_p_set[channel_capacity + 1 - j + id];
         }
 
         let k_denom = E::pairing(sum_g1, header.0);
@@ -41,15 +39,15 @@ impl<E: PairingEngine> KeyPair<E> {
     }
 }
 
-/// Pool of channel consumers of the channel
+/// ReaderPool of channel consumers of the channel
 #[derive(Clone, Debug)]
-pub struct Pool<E: PairingEngine> {
+pub struct ReaderPool<E: PairingEngine> {
     pub list: HashMap<usize, KeyPair<E>>, // perhaps change from usize to an hash(usize)?
 }
 
-impl<E: PairingEngine> Pool<E> {
+impl<E: PairingEngine> ReaderPool<E> {
     pub fn new() -> Self {
-        return Pool {
+        return ReaderPool {
             list: HashMap::new(),
         };
     }
@@ -64,7 +62,7 @@ pub struct BroadcastPubKey<E: PairingEngine> {
 
 pub struct BroadcastChannel<E: PairingEngine> {
     pub channel_pubkey: BroadcastPubKey<E>,
-    pub participants: Pool<E>,
+    pub participants: ReaderPool<E>,
     pub capacity: usize,
 }
 
@@ -78,7 +76,7 @@ impl<E: PairingEngine> BroadcastChannel<E> {
 
         let mut p_set = Vec::new();
 
-        let mut participants = Pool::new();
+        let mut participants = ReaderPool::new();
 
         let mut v = E::G1Projective::prime_subgroup_generator();
         v *= rnd_gamma;
@@ -88,12 +86,15 @@ impl<E: PairingEngine> BroadcastChannel<E> {
             if i == capacity + 1 {
                 continue;
             }
+
+            // TODO: keep state of the previous run to cut on computation
             p_set.push(exp(&p_gen, rnd_alpha, i));
         }
 
         for i in 0..capacity {
-            let public_key = exp(&q_gen, E::Fr::one(), i);
+            let public_key = exp(&q_gen, rnd_alpha, i);
             let private_key = exp(&p_set[i], rnd_gamma, i);
+
             let key_pair = KeyPair {
                 public_key,
                 private_key,
@@ -106,7 +107,7 @@ impl<E: PairingEngine> BroadcastChannel<E> {
             p_set,
             v,
             q: q_gen,
-            q_1: exp(&q_gen, E::Fr::one(), 1),
+            q_1: exp(&q_gen, rnd_alpha, 1),
         };
 
         BroadcastChannel {
@@ -125,12 +126,13 @@ impl<E: PairingEngine> BroadcastChannel<E> {
         let rnd_k = E::Fr::rand(rng);
 
         // K
-        let mut pn = self.channel_pubkey.p_set[self.capacity];
-        pn *= rnd_k;
-        let k = E::pairing(pn, self.channel_pubkey.q_1);
+        // K=e(Pn+1,Q)^k
+        let mut qk = self.channel_pubkey.q_1;
+        qk *= rnd_k;
+        let k = E::pairing(self.channel_pubkey.p_set[self.capacity], qk);
 
         // Header
-        let mut sum_g1 = self.channel_pubkey.v; // init Sum as `Sum=V`
+        let mut sum_g1 = self.channel_pubkey.v; // init Sum as `Sum = V`
 
         for j in reader_ids {
             sum_g1 += &self.channel_pubkey.p_set[self.capacity + 1 - j];
@@ -138,11 +140,7 @@ impl<E: PairingEngine> BroadcastChannel<E> {
 
         sum_g1 *= rnd_k;
 
-        // kQ
-        let mut q = self.channel_pubkey.q;
-        q *= rnd_k;
-
-        let header = (q, sum_g1);
+        let header = (qk, sum_g1);
 
         (header, k)
     }
